@@ -32,7 +32,7 @@
   <div id="banner">بانتظار التسجيل...</div>
   <div id="score">0</div>
   <div id="phase"></div>
-  <button id="fire">🔫 +اضرب</button>
+  <button id="fire">🔫 اضرب</button>
   <button id="cal">معايرة (المنتصف)</button>
 </div>
 
@@ -46,15 +46,20 @@
 
   var id = Math.random().toString(36).substr(2, 6);
   var room = null, url = null, tvUrl = null;
-  var base = null, last = null;
-  var RANGE_X = 42, RANGE_Y = 42;        // قيمة أصغر = حساسية أعلى
-  var SIGN_X = -1;                        // لو اليمين/الشمال اتعكسوا غيّرها لـ -1
+
+  // ===== إعدادات التصويب =====
+  var RANGE_X = 40, RANGE_Y = 30;   // الزاوية (بالدرجات) اللي تغطي الشاشة كلها. رقم أكبر = حساسية أقل
+  var SIGN_X = 1;                   // لو اليمين/الشمال اتعكسوا غيّرها لـ -1
+  var SIGN_Y = 1;                   // لو فوق/تحت اتعكسوا غيّرها لـ -1
+  var USE_SENSOR_API = true;        // false = يستخدم الطريقة القديمة (deviceorientation) فقط
+
   var out = { x: 0.5, y: 0.5, f: 0, t: 1 };
   var sending = false, dirty = true;
   var tv = {}, lastScore = 0;
 
   function wrap(d) { while (d > 180) d -= 360; while (d < -180) d += 360; return d; }
   function clamp(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function deg(r) { return r * 180 / Math.PI; }
 
   // ---------- إرسال ----------
   function send() {
@@ -71,27 +76,90 @@
   setInterval(send, 40);
   setInterval(function () { dirty = true; }, 1500);   // نبضة عشان التلفزيون يعرف إنك متصل
 
-  // ---------- الحساس ----------
-  function onOrient(e) {
-    if (e.alpha === null) return;
-    last = { a: e.alpha, b: e.beta };
-    if (!base) { base = { a: last.a, b: last.b }; }   // معايرة تلقائية أول مرة
-    var dx = wrap(last.a - base.a);
-    var dy = last.b - base.b;
+  // ---------- التصويب (اتجاه الموبايل في الفراغ) ----------
+  // axes.y = اتجاه الحافة العلوية للموبايل، axes.z = اتجاه ضهر الشاشة (كل واحد في إحداثيات العالم)
+  var axes = null, base = null, src = null;
+
+  function pointing(axis) {
+    if (axis === "y") { return axes.y; }
+    return [-axes.z[0], -axes.z[1], -axes.z[2]];      // الكاميرا الخلفية
+  }
+  function angles(p) {
+    var s = Math.max(-1, Math.min(1, p[2]));
+    return { yaw: deg(Math.atan2(p[0], p[1])), pitch: deg(Math.asin(s)) };
+  }
+  function calibrate() {
+    if (!axes) return;
+    // نختار المحور الأقرب للأفقي: لو ماسك الموبايل مسطح = الحافة العلوية، ولو واقف = الكاميرا الخلفية
+    var ax = Math.abs(axes.y[2]) < Math.abs(axes.z[2]) ? "y" : "z";
+    var a = angles(pointing(ax));
+    base = { axis: ax, yaw: a.yaw, pitch: a.pitch };
+  }
+  function update() {
+    if (!axes) return;
+    if (!base) { calibrate(); }
+    var a = angles(pointing(base.axis));
+    var dx = wrap(a.yaw - base.yaw);
+    var dy = a.pitch - base.pitch;
     out.x = clamp(0.5 + SIGN_X * dx / (RANGE_X * 2));
-    out.y = clamp(0.5 - dy / (RANGE_Y * 2));
+    out.y = clamp(0.5 - SIGN_Y * dy / (RANGE_Y * 2));
     dirty = true;
   }
-  function startSensors(cb) {
+
+  // مصدر 1: الحساس الحديث (جيروسكوب + عجلة بدون بوصلة)، ما بيتأثرش بالمغناطيس
+  function fromQuat(q) {
+    if (src === "euler") return;
+    src = "quat";
+    var x = q[0], y = q[1], z = q[2], w = q[3];
+    axes = {
+      y: [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)],
+      z: [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]
+    };
+    update();
+  }
+  // مصدر 2: deviceorientation (احتياطي، وللآيفون)
+  function fromEuler(e) {
+    if (src === "quat") return;
+    if (e.alpha === null || e.beta === null || e.gamma === null) return;
+    src = "euler";
+    var r = Math.PI / 180, a = e.alpha * r, b = e.beta * r, g = e.gamma * r;
+    var sa = Math.sin(a), ca = Math.cos(a), sb = Math.sin(b), cb = Math.cos(b), sg = Math.sin(g), cg = Math.cos(g);
+    axes = {
+      y: [-sa * cb, ca * cb, sb],
+      z: [ca * sg + sa * sb * cg, sa * sg - sb * cg * ca, cb * cg]
+    };
+    update();
+  }
+
+  var eulerOn = false;
+  function startEuler(cb) {
+    if (eulerOn) { if (cb) cb(true); return; }
     if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function") {
       DeviceOrientationEvent.requestPermission().then(function (s) {
-        if (s === "granted") { window.addEventListener("deviceorientation", onOrient, true); cb(true); }
-        else cb(false);
-      })["catch"](function () { cb(false); });
+        if (s === "granted") { eulerOn = true; window.addEventListener("deviceorientation", fromEuler, true); if (cb) cb(true); }
+        else if (cb) cb(false);
+      })["catch"](function () { if (cb) cb(false); });
     } else if (window.DeviceOrientationEvent) {
-      window.addEventListener("deviceorientation", onOrient, true);
-      cb(true);
-    } else { cb(false); }
+      eulerOn = true;
+      window.addEventListener("deviceorientation", fromEuler, true);
+      if (cb) cb(true);
+    } else if (cb) { cb(false); }
+  }
+
+  function startSensors(cb) {
+    if (USE_SENSOR_API && window.RelativeOrientationSensor) {
+      try {
+        var s = new RelativeOrientationSensor({ frequency: 60, referenceFrame: "device" });
+        var got = false;
+        s.addEventListener("reading", function () { got = true; if (s.quaternion) { fromQuat(s.quaternion); } });
+        s.addEventListener("error", function () { if (!got) { startEuler(null); } });
+        s.start();
+        setTimeout(function () { if (!got) { startEuler(null); } }, 1500);
+        cb(true);
+        return;
+      } catch (e) {}
+    }
+    startEuler(cb);
   }
 
   // ---------- استقبال حالة اللعبة من التلفزيون ----------
@@ -160,8 +228,7 @@
   };
 
   $("cal").onclick = function () {
-    if (!last) return;
-    base = { a: last.a, b: last.b };
+    calibrate();
     dirty = true;
   };
 
