@@ -32,7 +32,7 @@
   <div id="banner">بانتظار التسجيل...</div>
   <div id="score">0</div>
   <div id="phase"></div>
-  <button id="fire">🔫 اضرب</button>
+  <button id="fire">🔫 1اضرب</button>
   <button id="cal">معايرة (المنتصف)</button>
 </div>
 
@@ -47,7 +47,7 @@
   var id = Math.random().toString(36).substr(2, 6);
   var room = null, url = null, tvUrl = null;
   var base = null, last = null;
-  var RANGE_X = 40, RANGE_Y = 32;        // قيمة أصغر = حساسية أعلى
+  var RANGE_X = 30, RANGE_Y = 32;        // قيمة أصغر = حساسية أعلى
   var SIGN_X = -1;                        // لو اليمين/الشمال اتعكسوا غيّرها لـ -1
   var out = { x: 0.5, y: 0.5, f: 0, t: 1 };
   var sending = false, dirty = true;
