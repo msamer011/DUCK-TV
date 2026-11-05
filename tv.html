@@ -7,199 +7,426 @@
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#4bb8f0; font-family:Arial, sans-serif; }
   #game { position:absolute; left:0; top:0; width:100%; height:100%; }
-  #pair { position:absolute; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,.85); color:#fff; text-align:center; z-index:5; }
-  #pair .box { margin-top:5%; }
-  #pair h1 { font-size:42px; margin:10px; }
-  #code { font-size:90px; letter-spacing:14px; color:#ffd400; direction:ltr; margin:10px; }
-  #link { font-size:22px; color:#9cf; direction:ltr; word-break:break-all; margin:10px 60px; }
-  #qr { background:#fff; padding:10px; margin:10px; }
-  #status { font-size:22px; margin:10px; color:#ccc; }
+  #panel { position:absolute; right:0; top:0; width:280px; height:100%; background:rgba(0,0,0,.8); color:#fff; text-align:center; z-index:5; }
+  #panel h2 { font-size:24px; margin:16px 8px 2px; }
+  #code { font-size:64px; letter-spacing:8px; color:#ffd400; direction:ltr; margin:4px; }
+  #qr { background:#fff; padding:8px; margin:6px; }
+  #link { font-size:12px; color:#9cf; direction:ltr; word-break:break-all; margin:4px 10px; }
+  #plist { font-size:24px; margin-top:12px; line-height:1.7; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
+<canvas id="game" dir="ltr"></canvas>
 
-<div id="pair">
-  <div class="box">
-    <h1>افتح الموبايل وادخل الكود</h1>
-    <div id="code">----</div>
-    <img id="qr" width="200" height="200" alt="">
-    <div id="link"></div>
-    <div id="status">بانتظار الموبايل...</div>
-  </div>
+<div id="panel">
+  <h2>ادخل بالموبايل</h2>
+  <div id="code">----</div>
+  <img id="qr" width="160" height="160" alt="">
+  <div id="link"></div>
+  <div id="plist">بانتظار الموبايل...</div>
 </div>
 
 <script src="config.js"></script>
 <script>
 (function () {
-  // ---------- إعداد الغرفة ----------
+  var PANEL = 280;
+  var COLORS = ["#ff3b30", "#0a84ff", "#ffcc00", "#30d158"];
+
+  function now() { return new Date().getTime(); }
+  function xhr(method, url, body) {
+    try {
+      var r = new XMLHttpRequest();
+      r.open(method, url, true);
+      r.send(body === undefined ? null : JSON.stringify(body));
+    } catch (e) {}
+  }
+
+  // ---------- الغرفة ----------
   var room = String(Math.floor(1000 + Math.random() * 9000));
   var roomUrl = DB_URL + "/rooms/" + room + ".json";
-
+  var tvUrl = DB_URL + "/rooms/" + room + "/tv.json";
   var base = location.href.replace(/tv\.html.*$/, "");
   var phoneLink = base + "phone.html?r=" + room;
   document.getElementById("code").innerHTML = room;
   document.getElementById("link").innerHTML = phoneLink;
   document.getElementById("qr").src =
-    "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(phoneLink);
-
-  function xhr(method, url, body) {
-    try {
-      var r = new XMLHttpRequest();
-      r.open(method, url, true);
-      r.send(body ? JSON.stringify(body) : null);
-    } catch (e) {}
-  }
-  // نظّف الغرفة
+    "https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=" + encodeURIComponent(phoneLink);
   xhr("PUT", roomUrl, null);
 
-  // ---------- استقبال بيانات الموبايل ----------
-  var state = { x: 0.5, y: 0.5, f: 0, t: 0 };
-  var connected = false;
-  var lastFire = null;
-
-  function applyData(path, data) {
-    if (path === "/" || path === "") {
-      if (data && typeof data === "object") {
-        for (var k in data) { state[k] = data[k]; }
-      }
-    } else {
-      state[path.replace("/", "")] = data;
-    }
-    if (!connected && state.t) {
-      connected = true;
-      document.getElementById("pair").style.display = "none";
-    }
-    if (lastFire === null) { lastFire = state.f || 0; }
-    if (state.f > lastFire) { lastFire = state.f; shoot(); }
-  }
-
-  function listen() {
-    var es = new EventSource(roomUrl);
-    function handler(ev) {
-      try {
-        var m = JSON.parse(ev.data);
-        if (m) { applyData(m.path, m.data); }
-      } catch (e) {}
-    }
-    es.addEventListener("put", handler, false);
-    es.addEventListener("patch", handler, false);
-    es.onerror = function () {
-      document.getElementById("status").innerHTML = "مشكلة اتصال... بحاول تاني";
-    };
-  }
-  listen();
-
-  // ---------- اللعبة ----------
+  // ---------- حالة اللعبة ----------
   var canvas = document.getElementById("game");
   var ctx = canvas.getContext("2d");
-  var W = 0, H = 0;
+  var W = 0, H = 0, u = 1;
   function resize() {
     W = canvas.width = window.innerWidth;
     H = canvas.height = window.innerHeight;
+    u = H / 720;
   }
   resize();
   window.onresize = resize;
 
-  var cx = 0.5, cy = 0.5;      // مكان التصويب بعد التنعيم
-  var score = 0, shots = 0;
-  var flash = 0;
-  var duck = null;
+  var db = {};
+  var players = {};        // id -> player
+  var order = [];          // ids بترتيب الدخول
+  var active = [];         // اللاعبين في الجولة الحالية
+  var phase = "menu";      // menu | time | count | play | end
+  var mode = 1;            // 1 = لاعب واحد، 2 = متعدد
+  var duration = 60;
+  var countStart = 0, startTime = 0;
+  var ducks = [], pops = [];
+  var best = 0;
+  var tvDirty = true, lastTv = 0;
 
-  function newDuck() {
-    var fromLeft = Math.random() < 0.5;
-    duck = {
-      x: fromLeft ? -60 : W + 60,
-      y: H * (0.2 + Math.random() * 0.45),
-      vx: (fromLeft ? 1 : -1) * (3 + Math.random() * 3 + score * 0.15),
-      vy: -0.5 - Math.random(),
-      r: 38, dead: false, fall: 0
-    };
+  function getPlayer(id) {
+    if (players[id]) { return players[id]; }
+    if (order.length >= 4) { return null; }
+    var s = order.length;
+    var p = { id: id, slot: s, color: COLORS[s], x: 0.5, y: 0.5, tx: 0.5, ty: 0.5,
+              lastF: null, lastT: null, seen: now(), score: 0, flash: 0 };
+    players[id] = p;
+    order.push(id);
+    tvDirty = true;
+    return p;
   }
-  newDuck();
+  function isConn(p) { return p.id === "remote" || now() - p.seen < 10000; }
+  function connected() {
+    var r = [], i;
+    for (i = 0; i < order.length; i++) { if (isConn(players[order[i]])) { r.push(players[order[i]]); } }
+    return r;
+  }
+  function host() { var c = connected(); return c.length ? c[0] : null; }
 
-  function shoot() {
-    shots++;
-    flash = 6;
-    var px = cx * W, py = cy * H;
-    if (duck && !duck.dead) {
-      var dx = px - duck.x, dy = py - duck.y;
-      if (dx * dx + dy * dy < (duck.r + 14) * (duck.r + 14)) {
-        duck.dead = true;
-        score++;
+  // ---------- استقبال بيانات Firebase ----------
+  function setAt(obj, parts, val) {
+    if (parts.length === 0) { return val; }
+    if (obj === null || typeof obj !== "object") { obj = {}; }
+    obj[parts[0]] = setAt(obj[parts[0]], parts.slice(1), val);
+    return obj;
+  }
+  function onEvent(type, m) {
+    var parts = m.path.split("/").filter(function (s) { return s; });
+    if (type === "put") {
+      db = setAt(db, parts, m.data);
+    } else if (m.data && typeof m.data === "object") {
+      for (var k in m.data) { db = setAt(db, parts.concat([k]), m.data[k]); }
+    }
+    if (db === null || typeof db !== "object") { db = {}; }
+    syncPlayers();
+  }
+  function syncPlayers() {
+    var ps = db.players, id;
+    if (!ps) { return; }
+    for (id in ps) {
+      var d = ps[id];
+      if (!d || typeof d !== "object") { continue; }
+      var p = getPlayer(id);
+      if (!p) { continue; }
+      if (d.t !== p.lastT) {
+        p.lastT = d.t;
+        p.seen = now();
+        if (typeof d.x === "number") { p.tx = d.x; }
+        if (typeof d.y === "number") { p.ty = d.y; }
       }
+      var f = d.f || 0;
+      if (p.lastF === null) { p.lastF = f; }
+      if (f > p.lastF) { p.lastF = f; fire(p); }
+    }
+  }
+  (function listen() {
+    var es = new EventSource(roomUrl);
+    function h(ev) {
+      try { var m = JSON.parse(ev.data); if (m) { onEvent(ev.type, m); } } catch (e) {}
+    }
+    es.addEventListener("put", h, false);
+    es.addEventListener("patch", h, false);
+  })();
+
+  // ---------- إرسال الحالة للموبايلات ----------
+  function sendTv() {
+    var slots = {}, scores = [], i;
+    for (i = 0; i < order.length; i++) {
+      slots[order[i]] = i;
+      scores.push(players[order[i]].score);
+    }
+    xhr("PUT", tvUrl, { phase: phase, mode: mode, slots: slots, scores: scores, n: now() });
+  }
+
+  // ---------- الأزرار ----------
+  function panelVisible() { return phase === "menu" || phase === "time" || phase === "end"; }
+  function areaW() { return panelVisible() ? W - PANEL : W; }
+
+  function startGame() {
+    var cs = connected();
+    if (mode === 1) { active = cs.length ? [cs[0]] : []; } else { active = cs; }
+    if (!active.length) { phase = "menu"; tvDirty = true; return; }
+    for (var i = 0; i < order.length; i++) { players[order[i]].score = 0; }
+    ducks = []; pops = [];
+    phase = "count"; countStart = now(); tvDirty = true;
+  }
+
+  function endGame() {
+    phase = "end"; ducks = [];
+    if (mode === 1 && active.length) {
+      var key = "duck_best_" + duration, prev = 0;
+      try { prev = parseInt(localStorage.getItem(key), 10) || 0; } catch (e) {}
+      best = Math.max(prev, active[0].score);
+      try { localStorage.setItem(key, String(best)); } catch (e2) {}
+    }
+    tvDirty = true;
+  }
+
+  function getButtons() {
+    var list = [], cs = connected().length, i;
+    if (phase === "menu") {
+      list.push({ label: "لاعب واحد", sub: "", disabled: cs < 1,
+                  act: function () { mode = 1; phase = "time"; tvDirty = true; } });
+      list.push({ label: "متعدد", sub: cs < 2 ? "محتاج لاعبين" : "", disabled: cs < 2,
+                  act: function () { mode = 2; phase = "time"; tvDirty = true; } });
+    } else if (phase === "time") {
+      list.push({ label: "30", sub: "ثانية", act: function () { duration = 30; startGame(); } });
+      list.push({ label: "60", sub: "ثانية", act: function () { duration = 60; startGame(); } });
+      list.push({ label: "رجوع", sub: "", act: function () { phase = "menu"; tvDirty = true; } });
+    } else if (phase === "end") {
+      list.push({ label: "العب تاني", sub: "", act: function () { startGame(); } });
+      list.push({ label: "القائمة", sub: "", act: function () { phase = "menu"; tvDirty = true; } });
+    }
+    var n = list.length, gap = 30 * u, aw = areaW();
+    var w = Math.min(320 * u, (aw - 80 * u - (n - 1) * gap) / (n || 1)), h = 130 * u;
+    var by = phase === "end" ? H * 0.84 : H * 0.55;
+    for (i = 0; i < n; i++) {
+      list[i].w = w; list[i].h = h;
+      list[i].x = aw / 2 - (n * w + (n - 1) * gap) / 2 + i * (w + gap);
+      list[i].y = by - h / 2;
+    }
+    return list;
+  }
+  function inside(px, py, b) { return px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h; }
+  function press(nx, ny) {
+    var bs = getButtons(), i;
+    for (i = 0; i < bs.length; i++) {
+      if (!bs[i].disabled && inside(nx * W, ny * H, bs[i])) { bs[i].act(); return; }
     }
   }
 
+  // ---------- الإطلاق ----------
+  function fire(p) {
+    p.flash = 6;
+    if (phase === "play") { shoot(p); }
+    else if (phase === "menu" || phase === "time" || phase === "end") {
+      if (p === host()) { press(p.x, p.y); }
+    }
+  }
+  function isActive(p) {
+    for (var i = 0; i < active.length; i++) { if (active[i] === p) { return true; } }
+    return false;
+  }
+  function shoot(p) {
+    if (!isActive(p)) { return; }
+    var px = p.x * W, py = p.y * H, bi = -1, bd = 1e12, i;
+    for (i = 0; i < ducks.length; i++) {
+      var d = ducks[i];
+      if (d.dead) { continue; }
+      var dx = px - d.x, dy = py - d.y, d2 = dx * dx + dy * dy, r = d.r + 18 * u;
+      if (d2 < r * r && d2 < bd) { bd = d2; bi = i; }
+    }
+    if (bi >= 0) {
+      ducks[bi].dead = true;
+      p.score++;
+      pops.push({ x: ducks[bi].x, y: ducks[bi].y, c: p.color, t: now() });
+      tvDirty = true;
+    }
+  }
+
+  function newDuck(el) {
+    var left = Math.random() < 0.5;
+    var mul = 1 + 0.8 * el / duration;
+    var sp = (3 + Math.random() * 3) * mul * (W / 1280);
+    return { x: left ? -60 * u : W + 60 * u, y: H * (0.15 + Math.random() * 0.5),
+             vx: (left ? 1 : -1) * sp, vy: -(0.5 + Math.random()) * u, r: 38 * u, dead: false };
+  }
+
+  // ---------- التحديث ----------
   function update() {
-    // تنعيم الحركة
-    cx += (state.x - cx) * 0.35;
-    cy += (state.y - cy) * 0.35;
-
-    if (duck) {
-      if (duck.dead) {
-        duck.y += 10;
-        if (duck.y > H * 0.82) { newDuck(); }
-      } else {
-        duck.x += duck.vx;
-        duck.y += duck.vy;
-        if (duck.y < 40) { duck.vy = Math.abs(duck.vy); }
-        if (duck.x < -120 || duck.x > W + 120) { newDuck(); }
+    var i, p;
+    for (i = 0; i < order.length; i++) {
+      p = players[order[i]];
+      p.x += (p.tx - p.x) * 0.35;
+      p.y += (p.ty - p.y) * 0.35;
+      if (p.flash > 0) { p.flash--; }
+    }
+    if (phase === "count") {
+      if (3 - Math.floor((now() - countStart) / 800) <= 0) { phase = "play"; startTime = now(); tvDirty = true; }
+    }
+    if (phase === "play") {
+      var el = (now() - startTime) / 1000;
+      if (el >= duration) { endGame(); return; }
+      var want = mode === 1 ? 2 : Math.min(4, active.length + 1);
+      while (ducks.length < want) { ducks.push(newDuck(el)); }
+      for (i = ducks.length - 1; i >= 0; i--) {
+        var d = ducks[i];
+        if (d.dead) {
+          d.y += 10 * u;
+          if (d.y > H * 0.84) { ducks.splice(i, 1); }
+        } else {
+          d.x += d.vx; d.y += d.vy;
+          if (d.y < 40 * u) { d.vy = Math.abs(d.vy); }
+          if (d.x < -150 * u || d.x > W + 150 * u) { ducks.splice(i, 1); }
+        }
       }
     }
-    if (flash > 0) { flash--; }
+  }
+
+  // ---------- الرسم ----------
+  function text(s, x, y, size, color, align) {
+    ctx.font = "bold " + Math.round(size * u) + "px Arial";
+    ctx.textAlign = align || "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = Math.max(2, size * u / 9);
+    ctx.strokeStyle = "rgba(0,0,0,.6)";
+    ctx.strokeText(s, x, y);
+    ctx.fillStyle = color || "#fff";
+    ctx.fillText(s, x, y);
+  }
+  function drawDuck(d) {
+    var dir = d.vx > 0 ? 1 : -1;
+    ctx.fillStyle = d.dead ? "#a33" : "#222";
+    ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = "#0a8a2a";
+    ctx.beginPath(); ctx.arc(d.x + dir * 28 * u, d.y - 22 * u, 16 * u, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = "#f90";
+    ctx.fillRect(dir > 0 ? d.x + 40 * u : d.x - 58 * u, d.y - 24 * u, 18 * u, 8 * u);
+  }
+  function crossPath(px, py, r, L) {
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, 6.2832);
+    ctx.moveTo(px - L, py); ctx.lineTo(px + L, py);
+    ctx.moveTo(px, py - L); ctx.lineTo(px, py + L);
+  }
+  function drawCross(p) {
+    var px = p.x * W, py = p.y * H, r = (p.flash ? 30 : 22) * u, L = 36 * u;
+    ctx.lineWidth = 8 * u; ctx.strokeStyle = "#000"; crossPath(px, py, r, L); ctx.stroke();
+    ctx.lineWidth = 4 * u; ctx.strokeStyle = p.color; crossPath(px, py, r, L); ctx.stroke();
+    text(String(p.slot + 1), px + r + 14 * u, py - r, 22, p.color);
+  }
+  function drawButtons() {
+    var bs = getButtons(), h = host(), i;
+    for (i = 0; i < bs.length; i++) {
+      var b = bs[i];
+      var hover = h && inside(h.x * W, h.y * H, b) && !b.disabled;
+      ctx.fillStyle = b.disabled ? "#777" : (hover ? "#ffb300" : "#2d7ff9");
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.lineWidth = 5 * u; ctx.strokeStyle = "#fff";
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      if (b.sub) {
+        text(b.label, b.x + b.w / 2, b.y + b.h * 0.38, 52);
+        text(b.sub, b.x + b.w / 2, b.y + b.h * 0.76, 28);
+      } else {
+        text(b.label, b.x + b.w / 2, b.y + b.h / 2, 46);
+      }
+    }
   }
 
   function draw() {
-    // سماء
-    ctx.fillStyle = "#4bb8f0";
-    ctx.fillRect(0, 0, W, H);
-    // عشب
-    ctx.fillStyle = "#3aa83a";
-    ctx.fillRect(0, H * 0.82, W, H * 0.18);
-    ctx.fillStyle = "#8a5a2b";
-    ctx.fillRect(0, H * 0.92, W, H * 0.08);
-
-    // البطة (شكل بسيط)
-    if (duck) {
-      ctx.fillStyle = duck.dead ? "#aa3333" : "#222";
-      ctx.beginPath(); ctx.arc(duck.x, duck.y, duck.r, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#0a8a2a";
-      ctx.beginPath(); ctx.arc(duck.x + (duck.vx > 0 ? 28 : -28), duck.y - 22, 16, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#f90";
-      ctx.fillRect(duck.x + (duck.vx > 0 ? 40 : -58), duck.y - 24, 18, 8);
+    var i, p;
+    ctx.fillStyle = "#4bb8f0"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#3aa83a"; ctx.fillRect(0, H * 0.82, W, H * 0.18);
+    ctx.fillStyle = "#8a5a2b"; ctx.fillRect(0, H * 0.92, W, H * 0.08);
+    for (i = 0; i < ducks.length; i++) { drawDuck(ducks[i]); }
+    for (i = pops.length - 1; i >= 0; i--) {
+      var age = now() - pops[i].t;
+      if (age > 700) { pops.splice(i, 1); continue; }
+      text("+1", pops[i].x, pops[i].y - age * 0.06 * u, 36, pops[i].c);
     }
 
-    // نقطة التصويب
-    var px = cx * W, py = cy * H;
-    ctx.strokeStyle = flash ? "#ff0" : "#e00";
-    ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(px, py, flash ? 30 : 22, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(px - 36, py); ctx.lineTo(px + 36, py);
-    ctx.moveTo(px, py - 36); ctx.lineTo(px, py + 36);
-    ctx.stroke();
+    var cx = areaW() / 2;
+    if (phase === "menu" || phase === "time") {
+      text("DUCK SHOOT", cx, H * 0.18, 84, "#fff");
+      var cs = connected().length;
+      var sub = cs < 1 ? "امسح الكود بالموبايل أو دوس OK بالريموت"
+              : (phase === "menu" ? "اختار نوع اللعب: صوّب على الزرار واضغط اضرب" : "اختار الوقت");
+      text(sub, cx, H * 0.32, 32, "#fff");
+      drawButtons();
+    }
+    if (phase === "count") {
+      text(String(Math.max(1, 3 - Math.floor((now() - countStart) / 800))), W / 2, H / 2, 220, "#fff");
+    }
+    if (phase === "play") {
+      var left = Math.max(0, Math.ceil(duration - (now() - startTime) / 1000));
+      text(String(left), W / 2, 50 * u, 60, left <= 5 ? "#ff5252" : "#fff");
+      for (i = 0; i < active.length; i++) {
+        text("P" + (active[i].slot + 1) + ": " + active[i].score, 30 * u + i * 190 * u, 50 * u, 36, active[i].color, "left");
+      }
+    }
+    if (phase === "end") {
+      ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(0, 0, areaW(), H);
+      if (mode === 1 && active.length) {
+        text("SCORE", cx, H * 0.17, 60);
+        text(String(active[0].score), cx, H * 0.38, 160, "#ffd400");
+        text("BEST " + best, cx, H * 0.6, 44);
+      } else {
+        var sorted = active.slice().sort(function (a, b) { return b.score - a.score; });
+        for (i = 0; i < sorted.length; i++) {
+          text("P" + (sorted[i].slot + 1) + "   " + sorted[i].score, cx, H * 0.13 + i * 62 * u, 50, sorted[i].color);
+        }
+        if (sorted.length) {
+          var tie = sorted.length > 1 && sorted[0].score === sorted[1].score;
+          if (tie) { text("تعادل", cx, H * 0.6, 64, "#ffd400"); }
+          else {
+            text("الفائز", cx, H * 0.53, 44);
+            text("P" + (sorted[0].slot + 1), cx, H * 0.64, 76, sorted[0].color);
+          }
+        }
+      }
+      drawButtons();
+    }
 
-    // النتيجة
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 34px Arial";
-    ctx.textAlign = "left";
-    ctx.fillText("HIT: " + score + "   SHOTS: " + shots, 30, 50);
+    // نقاط التصويب
+    var cs2 = connected();
+    for (i = 0; i < cs2.length; i++) {
+      p = cs2[i];
+      if ((phase === "play" || phase === "count") && !isActive(p)) { continue; }
+      drawCross(p);
+    }
   }
 
   var raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
     function (fn) { return setTimeout(fn, 33); };
-  function loop() { update(); draw(); raf(loop); }
+  function loop() {
+    update(); draw();
+    if (tvDirty && now() - lastTv > 150) { tvDirty = false; lastTv = now(); sendTv(); }
+    raf(loop);
+  }
   loop();
 
-  // زرار OK في الريموت = إطلاق (للتجربة بدون موبايل)
+  // ---------- قائمة اللاعبين ----------
+  setInterval(function () {
+    var html = "", i;
+    for (i = 0; i < order.length; i++) {
+      var p = players[order[i]], on = isConn(p);
+      html += '<div style="color:' + p.color + ';opacity:' + (on ? 1 : 0.4) + '">&#9679; ' +
+        (p.id === "remote" ? "الريموت" : "لاعب " + (p.slot + 1)) + (on ? "" : " (منقطع)") + '</div>';
+    }
+    document.getElementById("plist").innerHTML = html || "بانتظار الموبايل...";
+    document.getElementById("panel").style.display = panelVisible() ? "block" : "none";
+  }, 500);
+
+  // ---------- الريموت (لاعب احتياطي) ----------
+  var holdCount = 0, lastKey = 0, lastKeyTime = 0;
   document.onkeydown = function (e) {
     var k = e.keyCode;
-    if (k === 13) { shoot(); }
-    if (k === 37) { state.x = Math.max(0, state.x - 0.03); }
-    if (k === 39) { state.x = Math.min(1, state.x + 0.03); }
-    if (k === 38) { state.y = Math.max(0, state.y - 0.03); }
-    if (k === 40) { state.y = Math.min(1, state.y + 0.03); }
+    if (k !== 13 && (k < 37 || k > 40)) { return; }
+    var p = getPlayer("remote");
+    if (!p) { return; }
+    p.seen = now();
+    if (k === 13) { fire(p); return; }
+    var t = now();
+    if (k === lastKey && t - lastKeyTime < 250) { holdCount++; } else { holdCount = 0; }
+    lastKey = k; lastKeyTime = t;
+    var step = 0.012 * (1 + Math.min(holdCount, 12) * 0.5);
+    if (k === 37) { p.tx = Math.max(0, p.tx - step); }
+    if (k === 39) { p.tx = Math.min(1, p.tx + step); }
+    if (k === 38) { p.ty = Math.max(0, p.ty - step); }
+    if (k === 40) { p.ty = Math.min(1, p.ty + step); }
   };
 })();
 </script>
