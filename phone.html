@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Phone Controller</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<style>
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:#111; color:#fff; font-family:Arial, sans-serif; text-align:center; user-select:none; }
+  .screen { display:none; height:100%; padding:20px; }
+  .screen.on { display:flex; flex-direction:column; justify-content:center; align-items:center; }
+  input { font-size:44px; width:220px; text-align:center; letter-spacing:8px; padding:10px; border-radius:12px; border:0; direction:ltr; }
+  button { font-size:24px; border:0; border-radius:16px; padding:16px 28px; margin:10px; color:#fff; background:#2d7ff9; }
+  #fire { width:80%; height:45%; font-size:48px; background:#e53935; border-radius:28px; }
+  #cal { background:#555; }
+  #msg { margin-top:12px; color:#f99; min-height:24px; }
+  #info { color:#aaa; font-size:16px; margin:6px; }
+</style>
+</head>
+<body>
+
+<div id="s1" class="screen on">
+  <h2>اكتب الكود اللي على التلفزيون</h2>
+  <input id="code" type="tel" maxlength="4" placeholder="0000">
+  <button id="go">اتصال</button>
+  <div id="msg"></div>
+</div>
+
+<div id="s2" class="screen">
+  <h2>وجّه الموبايل ناحية منتصف الشاشة</h2>
+  <div id="info">ثم اضغط معايرة</div>
+  <button id="cal">معايرة (المنتصف)</button>
+  <button id="fire">🔫 اضرب</button>
+  <div id="info2" style="color:#aaa"></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var params = location.search.match(/[?&]r=(\d{4})/);
+  if (params) { $("code").value = params[1]; }
+
+  var room = null, url = null;
+  var base = null;                       // نقطة المعايرة {a, b}
+  var last = null;                       // آخر قراءة {a, b}
+  var RANGE_X = 30, RANGE_Y = 22;        // درجات الحركة يمين/شمال وفوق/تحت لتغطية الشاشة كلها
+  var out = { x: 0.5, y: 0.5, f: 0, t: 1 };
+  var sending = false, dirty = true;
+
+  function wrap(d) { while (d > 180) d -= 360; while (d < -180) d += 360; return d; }
+  function clamp(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+  // ---------- الإرسال (طلب واحد في كل مرة) ----------
+  function send() {
+    if (sending || !dirty || !url) return;
+    sending = true; dirty = false;
+    out.t = new Date().getTime();
+    var r = new XMLHttpRequest();
+    r.open("PUT", url, true);
+    r.onreadystatechange = function () {
+      if (r.readyState === 4) { sending = false; if (dirty) send(); }
+    };
+    r.send(JSON.stringify(out));
+  }
+  setInterval(send, 40);
+
+  // ---------- قراءة الحساس ----------
+  function onOrient(e) {
+    if (e.alpha === null) return;
+    last = { a: e.alpha, b: e.beta };
+    if (!base) return;
+    var dx = wrap(last.a - base.a);      // يسار = موجب
+    var dy = last.b - base.b;            // رفع الموبايل = موجب
+    out.x = clamp(0.5 - dx / (RANGE_X * 2));
+    out.y = clamp(0.5 - dy / (RANGE_Y * 2));
+    dirty = true;
+  }
+
+  function startSensors(cb) {
+    if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function") {
+      DeviceOrientationEvent.requestPermission().then(function (s) {
+        if (s === "granted") { window.addEventListener("deviceorientation", onOrient, true); cb(true); }
+        else cb(false);
+      })["catch"](function () { cb(false); });
+    } else if (window.DeviceOrientationEvent) {
+      window.addEventListener("deviceorientation", onOrient, true);
+      cb(true);
+    } else { cb(false); }
+  }
+
+  // ---------- الأزرار ----------
+  $("go").onclick = function () {
+    var c = $("code").value;
+    if (!/^\d{4}$/.test(c)) { $("msg").innerHTML = "الكود لازم 4 أرقام"; return; }
+    if (!window.isSecureContext && location.hostname !== "localhost") {
+      $("msg").innerHTML = "لازم الصفحة تتفتح بـ HTTPS";
+    }
+    room = c;
+    url = DB_URL + "/rooms/" + room + ".json";
+    startSensors(function (ok) {
+      if (!ok) { $("msg").innerHTML = "الحساسات مش متاحة أو اتمنعت"; return; }
+      $("s1").className = "screen"; $("s2").className = "screen on";
+      dirty = true; send();
+    });
+  };
+
+  $("cal").onclick = function () {
+    if (!last) { $("info2").innerHTML = "مفيش قراءة من الحساس لسه"; return; }
+    base = { a: last.a, b: last.b };
+    $("info2").innerHTML = "تمت المعايرة ✔";
+    dirty = true;
+  };
+
+  $("fire").onclick = function () {
+    out.f = out.f + 1;
+    dirty = true; send();
+    if (navigator.vibrate) navigator.vibrate(60);
+  };
+  // لمس أسرع من click
+  $("fire").ontouchstart = function (e) { e.preventDefault(); $("fire").onclick(); };
+})();
+</script>
+</body>
+</html>

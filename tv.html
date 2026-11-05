@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Duck Shoot TV</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#4bb8f0; font-family:Arial, sans-serif; }
+  #game { position:absolute; left:0; top:0; width:100%; height:100%; }
+  #pair { position:absolute; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,.85); color:#fff; text-align:center; z-index:5; }
+  #pair .box { margin-top:5%; }
+  #pair h1 { font-size:42px; margin:10px; }
+  #code { font-size:90px; letter-spacing:14px; color:#ffd400; direction:ltr; margin:10px; }
+  #link { font-size:22px; color:#9cf; direction:ltr; word-break:break-all; margin:10px 60px; }
+  #qr { background:#fff; padding:10px; margin:10px; }
+  #status { font-size:22px; margin:10px; color:#ccc; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="pair">
+  <div class="box">
+    <h1>افتح الموبايل وادخل الكود</h1>
+    <div id="code">----</div>
+    <img id="qr" width="200" height="200" alt="">
+    <div id="link"></div>
+    <div id="status">بانتظار الموبايل...</div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  // ---------- إعداد الغرفة ----------
+  var room = String(Math.floor(1000 + Math.random() * 9000));
+  var roomUrl = DB_URL + "/rooms/" + room + ".json";
+
+  var base = location.href.replace(/tv\.html.*$/, "");
+  var phoneLink = base + "phone.html?r=" + room;
+  document.getElementById("code").innerHTML = room;
+  document.getElementById("link").innerHTML = phoneLink;
+  document.getElementById("qr").src =
+    "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(phoneLink);
+
+  function xhr(method, url, body) {
+    try {
+      var r = new XMLHttpRequest();
+      r.open(method, url, true);
+      r.send(body ? JSON.stringify(body) : null);
+    } catch (e) {}
+  }
+  // نظّف الغرفة
+  xhr("PUT", roomUrl, null);
+
+  // ---------- استقبال بيانات الموبايل ----------
+  var state = { x: 0.5, y: 0.5, f: 0, t: 0 };
+  var connected = false;
+  var lastFire = null;
+
+  function applyData(path, data) {
+    if (path === "/" || path === "") {
+      if (data && typeof data === "object") {
+        for (var k in data) { state[k] = data[k]; }
+      }
+    } else {
+      state[path.replace("/", "")] = data;
+    }
+    if (!connected && state.t) {
+      connected = true;
+      document.getElementById("pair").style.display = "none";
+    }
+    if (lastFire === null) { lastFire = state.f || 0; }
+    if (state.f > lastFire) { lastFire = state.f; shoot(); }
+  }
+
+  function listen() {
+    var es = new EventSource(roomUrl);
+    function handler(ev) {
+      try {
+        var m = JSON.parse(ev.data);
+        if (m) { applyData(m.path, m.data); }
+      } catch (e) {}
+    }
+    es.addEventListener("put", handler, false);
+    es.addEventListener("patch", handler, false);
+    es.onerror = function () {
+      document.getElementById("status").innerHTML = "مشكلة اتصال... بحاول تاني";
+    };
+  }
+  listen();
+
+  // ---------- اللعبة ----------
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var W = 0, H = 0;
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  resize();
+  window.onresize = resize;
+
+  var cx = 0.5, cy = 0.5;      // مكان التصويب بعد التنعيم
+  var score = 0, shots = 0;
+  var flash = 0;
+  var duck = null;
+
+  function newDuck() {
+    var fromLeft = Math.random() < 0.5;
+    duck = {
+      x: fromLeft ? -60 : W + 60,
+      y: H * (0.2 + Math.random() * 0.45),
+      vx: (fromLeft ? 1 : -1) * (3 + Math.random() * 3 + score * 0.15),
+      vy: -0.5 - Math.random(),
+      r: 38, dead: false, fall: 0
+    };
+  }
+  newDuck();
+
+  function shoot() {
+    shots++;
+    flash = 6;
+    var px = cx * W, py = cy * H;
+    if (duck && !duck.dead) {
+      var dx = px - duck.x, dy = py - duck.y;
+      if (dx * dx + dy * dy < (duck.r + 14) * (duck.r + 14)) {
+        duck.dead = true;
+        score++;
+      }
+    }
+  }
+
+  function update() {
+    // تنعيم الحركة
+    cx += (state.x - cx) * 0.35;
+    cy += (state.y - cy) * 0.35;
+
+    if (duck) {
+      if (duck.dead) {
+        duck.y += 10;
+        if (duck.y > H * 0.82) { newDuck(); }
+      } else {
+        duck.x += duck.vx;
+        duck.y += duck.vy;
+        if (duck.y < 40) { duck.vy = Math.abs(duck.vy); }
+        if (duck.x < -120 || duck.x > W + 120) { newDuck(); }
+      }
+    }
+    if (flash > 0) { flash--; }
+  }
+
+  function draw() {
+    // سماء
+    ctx.fillStyle = "#4bb8f0";
+    ctx.fillRect(0, 0, W, H);
+    // عشب
+    ctx.fillStyle = "#3aa83a";
+    ctx.fillRect(0, H * 0.82, W, H * 0.18);
+    ctx.fillStyle = "#8a5a2b";
+    ctx.fillRect(0, H * 0.92, W, H * 0.08);
+
+    // البطة (شكل بسيط)
+    if (duck) {
+      ctx.fillStyle = duck.dead ? "#aa3333" : "#222";
+      ctx.beginPath(); ctx.arc(duck.x, duck.y, duck.r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#0a8a2a";
+      ctx.beginPath(); ctx.arc(duck.x + (duck.vx > 0 ? 28 : -28), duck.y - 22, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#f90";
+      ctx.fillRect(duck.x + (duck.vx > 0 ? 40 : -58), duck.y - 24, 18, 8);
+    }
+
+    // نقطة التصويب
+    var px = cx * W, py = cy * H;
+    ctx.strokeStyle = flash ? "#ff0" : "#e00";
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(px, py, flash ? 30 : 22, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px - 36, py); ctx.lineTo(px + 36, py);
+    ctx.moveTo(px, py - 36); ctx.lineTo(px, py + 36);
+    ctx.stroke();
+
+    // النتيجة
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 34px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("HIT: " + score + "   SHOTS: " + shots, 30, 50);
+  }
+
+  var raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
+    function (fn) { return setTimeout(fn, 33); };
+  function loop() { update(); draw(); raf(loop); }
+  loop();
+
+  // زرار OK في الريموت = إطلاق (للتجربة بدون موبايل)
+  document.onkeydown = function (e) {
+    var k = e.keyCode;
+    if (k === 13) { shoot(); }
+    if (k === 37) { state.x = Math.max(0, state.x - 0.03); }
+    if (k === 39) { state.x = Math.min(1, state.x + 0.03); }
+    if (k === 38) { state.y = Math.max(0, state.y - 0.03); }
+    if (k === 40) { state.y = Math.min(1, state.y + 0.03); }
+  };
+})();
+</script>
+</body>
+</html>
