@@ -22,7 +22,7 @@
 <div id="s1" class="screen on">
   <h2>اكتب الكود اللي على التلفزيون</h2>
   <input id="code" type="tel" maxlength="4" placeholder="0000">
-  <button id="go">اتصال</button>
+  <button id="go">2اتصال</button>
   <div id="msg"></div>
 </div>
 
@@ -44,7 +44,7 @@
   var room = null, url = null;
   var base = null;                       // نقطة المعايرة {a, b}
   var last = null;                       // آخر قراءة {a, b}
-  var RANGE_X = 20, RANGE_Y = 12;        // درجات الحركة يمين/شمال وفوق/تحت لتغطية الشاشة كلها
+  var RANGE_X = 10, RANGE_Y = 2;        // درجات الحركة يمين/شمال وفوق/تحت لتغطية الشاشة كلها
   var out = { x: 0.5, y: 0.5, f: 0, t: 1 };
   var sending = false, dirty = true;
 
