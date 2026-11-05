@@ -250,7 +250,7 @@
     var i, p;
     for (i = 0; i < order.length; i++) {
       p = players[order[i]];
-      p.x += (p.tx - p.x) * 0.35;
+      p.x += (p.tx - p.x) * 0.2;
       p.y += (p.ty - p.y) * 0.35;
       if (p.flash > 0) { p.flash--; }
     }
