@@ -205,7 +205,9 @@
     if (sc > lastScore && navigator.vibrate) { navigator.vibrate(80); }
     lastScore = sc;
     $("score").innerHTML = sc;
-    $("phase").innerHTML = PHASES[tv.phase] || "";
+    var msg = PHASES[tv.phase] || "";
+    if (tv.mode === 3 && tv.lvl) { msg = "مرحلة " + tv.lvl + ": " + msg; }
+    $("phase").innerHTML = msg;
   }
 
   // ---------- الأزرار ----------
