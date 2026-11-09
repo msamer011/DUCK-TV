@@ -11,7 +11,9 @@
   .screen.on { display:flex; flex-direction:column; justify-content:center; align-items:center; }
   input { font-size:44px; width:220px; text-align:center; letter-spacing:8px; padding:10px; border-radius:12px; border:0; direction:ltr; }
   button { font-size:22px; border:0; border-radius:16px; padding:14px 26px; margin:8px; color:#fff; background:#2d7ff9; }
-  #fire { width:88%; height:42%; font-size:48px; background:#e53935; border-radius:28px; }
+  #fire { width:88%; height:34%; font-size:48px; background:#e53935; border-radius:28px; }
+  #ammo { font-size:34px; min-height:44px; letter-spacing:4px; color:#ffd54f; }
+  #rel { background:#8e24aa; }
   #cal { background:#555; }
   #msg { margin-top:12px; color:#f99; min-height:24px; }
   #banner { width:100%; padding:12px; border-radius:14px; font-size:26px; font-weight:bold; background:#444; color:#000; }
@@ -31,9 +33,13 @@
 <div id="s2" class="screen">
   <div id="banner">بانتظار التسجيل...</div>
   <div id="score">0</div>
+  <div id="ammo"></div>
   <div id="phase"></div>
   <button id="fire">🔫 اضرب</button>
-  <button id="cal">معايرة (المنتصف)</button>
+  <div>
+    <button id="rel">🔄 تعبئة</button>
+    <button id="cal">معايرة</button>
+  </div>
 </div>
 
 <script src="config.js"></script>
@@ -53,7 +59,8 @@
   var SIGN_Y = 1;                   // لو فوق/تحت اتعكسوا غيّرها لـ -1
   var USE_SENSOR_API = true;        // false = يستخدم الطريقة القديمة (deviceorientation) فقط
 
-  var out = { x: 0.5, y: 0.5, f: 0, t: 1 };
+  var out = { x: 0.5, y: 0.5, f: 0, r: 0, t: 1 };
+  var SHAKE_LIMIT = 30;             // قوة الهزة لإعادة التعبئة (رقم أكبر = لازم هزة أقوى)
   var sending = false, dirty = true;
   var tv = {}, lastScore = 0;
 
@@ -205,6 +212,19 @@
     if (sc > lastScore && navigator.vibrate) { navigator.vibrate(80); }
     lastScore = sc;
     $("score").innerHTML = sc;
+    var am = (slot !== undefined && tv.ammo) ? tv.ammo[slot] : null;
+    var rl = (slot !== undefined && tv.rl) ? tv.rl[slot] : 0;
+    var mag = tv.mag || 3, bullets = "", bi;
+    if (am === null || am === undefined || (tv.phase !== "play" && tv.phase !== "count")) {
+      $("ammo").innerHTML = "";
+    } else if (rl) {
+      $("ammo").style.color = "#ffd54f"; $("ammo").innerHTML = "جاري التعبئة...";
+    } else if (am <= 0) {
+      $("ammo").style.color = "#ff5252"; $("ammo").innerHTML = "فاضي! هز الموبايل";
+    } else {
+      for (bi = 0; bi < mag; bi++) { bullets += (bi < am ? "● " : "○ "); }
+      $("ammo").style.color = "#ffd54f"; $("ammo").innerHTML = bullets;
+    }
     var msg = PHASES[tv.phase] || "";
     if (tv.mode === 3 && tv.lvl) { msg = "مرحلة " + tv.lvl + ": " + msg; }
     $("phase").innerHTML = msg;
@@ -220,6 +240,7 @@
     room = c;
     url = DB_URL + "/rooms/" + room + "/players/" + id + ".json";
     tvUrl = DB_URL + "/rooms/" + room + "/tv.json";
+    startMotion();
     startSensors(function (ok) {
       if (!ok) { $("msg").innerHTML = "الحساسات مش متاحة أو اتمنعت"; return; }
       $("s1").className = "screen"; $("s2").className = "screen on";
@@ -233,6 +254,34 @@
     calibrate();
     dirty = true;
   };
+
+  // ---------- إعادة التعبئة: زرار أو هزة قوية للموبايل ----------
+  var lastReloadAt = 0;
+  function doReload() {
+    var t = new Date().getTime();
+    if (t - lastReloadAt < 700) return;
+    lastReloadAt = t;
+    out.r = out.r + 1;
+    dirty = true; send();
+    if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
+  }
+  $("rel").onclick = doReload;
+  $("rel").ontouchstart = function (e) { e.preventDefault(); doReload(); };
+  function onMotion(e) {
+    var a = e.accelerationIncludingGravity;
+    if (!a) return;
+    var m = Math.sqrt((a.x || 0) * (a.x || 0) + (a.y || 0) * (a.y || 0) + (a.z || 0) * (a.z || 0));
+    if (m > SHAKE_LIMIT) doReload();
+  }
+  function startMotion() {
+    if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === "function") {
+      DeviceMotionEvent.requestPermission().then(function (s) {
+        if (s === "granted") { window.addEventListener("devicemotion", onMotion, true); }
+      })["catch"](function () {});
+    } else if (window.DeviceMotionEvent) {
+      window.addEventListener("devicemotion", onMotion, true);
+    }
+  }
 
   $("fire").onclick = function () {
     out.f = out.f + 1;
