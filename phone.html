@@ -14,6 +14,11 @@
   #fire { width:88%; height:34%; font-size:48px; background:#e53935; border-radius:28px; }
   #ammo { font-size:34px; min-height:44px; letter-spacing:4px; color:#ffd54f; }
   #rel { background:#8e24aa; }
+  #gear { position:fixed; top:10px; left:10px; z-index:20; background:#333; padding:8px 14px; font-size:22px; margin:0; border-radius:12px; }
+  #set { display:none; position:fixed; left:0; right:0; bottom:0; z-index:30; background:#1c1c1c; border-top:2px solid #555; padding:16px; }
+  #set input[type=range] { width:90%; direction:ltr; }
+  #set button { background:#555; font-size:18px; padding:10px 16px; }
+  #set .srow { font-size:20px; margin:6px; }
   #cal { background:#555; }
   #msg { margin-top:12px; color:#f99; min-height:24px; }
   #banner { width:100%; padding:12px; border-radius:14px; font-size:26px; font-weight:bold; background:#444; color:#000; }
@@ -40,6 +45,16 @@
     <button id="rel">🔄 تعبئة</button>
     <button id="cal">معايرة</button>
   </div>
+</div>
+
+<button id="gear">⚙</button>
+<div id="set">
+  <div class="srow">الحساسية: <span id="sensv">7</span></div>
+  <input id="sens" type="range" min="1" max="10" step="1" value="7">
+  <div class="srow" style="display:flex;justify-content:space-between;direction:ltr;font-size:14px;color:#aaa;padding:0 5%;"><span>LOW</span><span>HIGH</span></div>
+  <button id="flipx">↔ عكس يمين/شمال</button>
+  <button id="flipy">↕ عكس فوق/تحت</button>
+  <button id="setclose">تم</button>
 </div>
 
 <script src="config.js"></script>
@@ -282,6 +297,35 @@
       window.addEventListener("devicemotion", onMotion, true);
     }
   }
+
+  // ---------- الإعدادات: الحساسية واتجاه الحركة (بتتحفظ على الموبايل) ----------
+  var sens = 7;
+  function saveSet() {
+    try { localStorage.setItem("duck_set", JSON.stringify({ sens: sens, sx: SIGN_X, sy: SIGN_Y })); } catch (e) {}
+  }
+  function applySet() {
+    RANGE_X = 100 - sens * 8;
+    RANGE_Y = RANGE_X * 0.75;
+    $("sensv").innerHTML = sens;
+    $("sens").value = sens;
+    $("flipx").style.background = SIGN_X < 0 ? "#2e7d32" : "#555";
+    $("flipy").style.background = SIGN_Y < 0 ? "#2e7d32" : "#555";
+  }
+  try {
+    var saved = localStorage.getItem("duck_set");
+    if (saved) {
+      var so = JSON.parse(saved);
+      if (so.sens) { sens = so.sens; }
+      if (so.sx) { SIGN_X = so.sx; }
+      if (so.sy) { SIGN_Y = so.sy; }
+    }
+  } catch (e) {}
+  applySet();
+  $("sens").oninput = function () { sens = parseInt($("sens").value, 10); applySet(); saveSet(); };
+  $("flipx").onclick = function () { SIGN_X = -SIGN_X; applySet(); saveSet(); };
+  $("flipy").onclick = function () { SIGN_Y = -SIGN_Y; applySet(); saveSet(); };
+  $("gear").onclick = function () { $("set").style.display = $("set").style.display === "block" ? "none" : "block"; };
+  $("setclose").onclick = function () { $("set").style.display = "none"; };
 
   $("fire").onclick = function () {
     out.f = out.f + 1;
