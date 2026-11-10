@@ -71,7 +71,7 @@
   var countStart = 0, startTime = 0, lastCountN = null;
   var ducks = [], pops = [], parts = [], rings = [];
   var best = 0, bestLevel = 0;
-  var lvl = 1, cfg = null, progress = 0, levelWin = false, stars = 0, levelScoreStart = 0;
+  var lvl = 1, cfg = null, progress = 0, levelWin = false, stars = 0, levelScoreStart = 0, bonusTime = 0;
   var shake = 0;
   var tvDirty = true, lastTv = 0;
 
@@ -79,7 +79,13 @@
   var biome = 0, sceneBiome = -1, roundNo = 0;
   var weather = "clear", wp = [], lightning = 0;
 
+  var savedLevel = 1;     // نقطة الاستكمال في مود المراحل
   try { bestLevel = parseInt(localStorage.getItem("duck_best_level"), 10) || 0; } catch (e0) {}
+  try { savedLevel = parseInt(localStorage.getItem("duck_saved_level"), 10) || 1; } catch (e1) {}
+  function saveLevel(n) {
+    savedLevel = n;
+    try { localStorage.setItem("duck_saved_level", String(n)); } catch (e) {}
+  }
 
   var BIOMES = [
     { name: "MEADOW", sky: ["#1769c2", "#58b4ee", "#cfeeff"], sunX: 0.78, sunY: 0.2, sunR: 42, glow: "255,246,170", disc: "#fffbe0",
@@ -104,17 +110,55 @@
 
   function biomeForLevel(n) { return Math.floor((n - 1) / 5) % 4; }
 
+  // أنواع الأهداف: ألوان الجسم/الصدر/الراس/الجناح، نقاط الضربة، لون الريش
+  var DUCKCOL = {
+    normal: ["#9c8566", "#7a4b2a", "#1b8a3c", "#5b4a37"],
+    gold: ["#ffd54f", "#ffb300", "#fff176", "#ff8f00"],
+    bomb: ["#8b1a1a", "#5a0f0f", "#2b2b2b", "#3a0b0b"],
+    boss: ["#3d3d5c", "#6a4c93", "#c62828", "#26264a"],
+    mini: ["#ff9800", "#e65100", "#ffcc80", "#bf360c"],
+    fast: ["#26c6da", "#00838f", "#006064", "#00acc1"],
+    zig: ["#ab47bc", "#6a1b9a", "#4a148c", "#8e24aa"],
+    shield: ["#b0bec5", "#78909c", "#37474f", "#546e7a"],
+    time: ["#42a5f5", "#1976d2", "#0d47a1", "#1565c0"]
+  };
+  var FEATHER = {
+    mini: ["#ff9800", "#ffe0b2", "#e65100"],
+    fast: ["#26c6da", "#b2ebf2", "#006064"],
+    zig: ["#ab47bc", "#e1bee7", "#4a148c"],
+    shield: ["#b0bec5", "#eceff1", "#546e7a"],
+    time: ["#42a5f5", "#bbdefb", "#0d47a1"]
+  };
+  var VALUES = { normal: 1, gold: 2, mini: 3, fast: 2, zig: 2, shield: 3, time: 1, boss: 5 };
+  var TYPE_INFO = [
+    ["mini", 2, "MINI DUCK = 3 POINTS"],
+    ["gold", 3, "GOLD DUCK = 2 POINTS"],
+    ["fast", 4, "FAST DUCK = 2 POINTS"],
+    ["bomb", 6, "AVOID THE RED DUCK"],
+    ["zig", 7, "ZIGZAG DUCK = 2 POINTS"],
+    ["shield", 8, "ARMORED DUCK = 3 POINTS (2 HITS)"],
+    ["time", 9, "CLOCK DUCK = +3 SECONDS"]
+  ];
+
   function levelCfg(n) {
-    var boss = (n % 5 === 0);
+    var boss = (n % 5 === 0), types = [];
+    if (!boss) {
+      if (n >= 2) { types.push(["mini", 0.14]); }
+      if (n >= 3) { types.push(["gold", 0.10]); }
+      if (n >= 4) { types.push(["fast", 0.12]); }
+      if (n >= 6) { types.push(["bomb", 0.12]); }
+      if (n >= 7) { types.push(["zig", 0.12]); }
+      if (n >= 8) { types.push(["shield", 0.10]); }
+      if (n >= 9) { types.push(["time", 0.07]); }
+    }
     return {
       n: n, boss: boss,
       target: boss ? 1 : 4 + n * 2,
       time: boss ? 40 : 30 + Math.min(n, 10),
       speed: Math.min(3, 1 + 0.12 * (n - 1)),
       simult: boss ? 1 : Math.min(4, 1 + Math.ceil(n / 3)),
-      golden: n >= 3 ? 0.12 : 0,
-      bomb: (n >= 5 && !boss) ? 0.15 : 0,
-      hp: boss ? 5 + Math.floor(n / 5) * 2 : 1
+      types: types,
+            hp: boss ? 5 + Math.floor(n / 5) * 2 : 1
     };
   }
 
@@ -168,6 +212,8 @@
   var sfx = {
     shot: function () { noise(0.15, 0.5, 2400, 300); tone(180, 50, 0.12, "sawtooth", 0.25); },
     dry: function () { tone(220, 140, 0.05, "square", 0.14); },
+    clang: function () { tone(1200, 800, 0.1, "square", 0.18); noise(0.08, 0.3, 3000, 800); },
+    clock: function () { tone(1000, 1000, 0.06, "square", 0.16); tone(1500, 1500, 0.08, "square", 0.16, 0.09); },
     reload: function () { tone(300, 300, 0.05, "square", 0.14); tone(520, 520, 0.05, "square", 0.14, 0.3); },
     ready: function () { tone(800, 1100, 0.09, "square", 0.16); },
     hit: function () { tone(420, 230, 0.12, "sawtooth", 0.22); tone(380, 200, 0.14, "sawtooth", 0.2, 0.13); },
@@ -539,7 +585,7 @@
   function areaW() { return panelVisible() ? W - PANEL : W; }
 
   function beginRound() {
-    if (mode === 3) { cfg = levelCfg(lvl); progress = 0; levelScoreStart = active[0].score; applyBiome(biomeForLevel(lvl)); }
+    if (mode === 3) { cfg = levelCfg(lvl); progress = 0; bonusTime = 0; levelScoreStart = active[0].score; applyBiome(biomeForLevel(lvl)); }
     for (var i = 0; i < order.length; i++) { players[order[i]].ammo = MAG; players[order[i]].reloadUntil = 0; }
     ducks = []; pops = []; parts = []; rings = [];
     phase = "count"; countStart = now(); lastCountN = null; tvDirty = true;
@@ -635,7 +681,7 @@
   }
 
   function feathers(x, y, type, n) {
-    var pal = type === "gold" ? ["#ffd54f", "#fff59d", "#ffb300"]
+    var pal = FEATHER[type] ? FEATHER[type] : type === "gold" ? ["#ffd54f", "#fff59d", "#ffb300"]
             : type === "bomb" ? ["#e53935", "#333", "#ff8a80"]
             : type === "boss" ? ["#6a4c93", "#c62828", "#ddd"]
             : ["#8d6e4a", "#d7c4a3", "#1b8a3c"];
@@ -647,8 +693,10 @@
   }
 
   function hitDuck(d, p) {
-    if (d.type === "boss") {
-      d.hp--; feathers(d.x, d.y, "boss", 6); shake = 8; sfx.bossHit();
+    if (d.maxHp > 1) {
+      d.hp--;
+      if (d.type === "boss") { feathers(d.x, d.y, "boss", 6); shake = 8; sfx.bossHit(); }
+      else { feathers(d.x, d.y, d.type, 6); sfx.clang(); }
       if (d.hp > 0) { return; }
     }
     d.dead = true; d.spin = 0;
@@ -661,11 +709,16 @@
       shake = 14; sfx.boom(); tvDirty = true;
       return;
     }
-    var val = d.type === "gold" ? 2 : (d.type === "boss" ? 5 : 1);
+    var val = VALUES[d.type] || 1;
     p.score += val;
     progress += (d.type === "boss") ? 1 : val;
     pops.push({ x: d.x, y: d.y, c: p.color, s: "+" + val, t: now() });
-    if (d.type === "gold") { sfx.gold(); }
+    if (d.type === "time") {
+      bonusTime += 3;
+      pops.push({ x: d.x, y: d.y - 40 * u, c: "#4dd0e1", s: "+3s", t: now() });
+      sfx.clock();
+    }
+    else if (d.type === "gold" || d.type === "mini") { sfx.gold(); }
     else if (d.type === "boss") { sfx.bossDie(); shake = 16; }
     else { sfx.hit(); }
     tvDirty = true;
@@ -685,20 +738,30 @@
   }
 
   function newDuck(el) {
-    var left = Math.random() < 0.5, type = "normal", mul, sp, r;
+    var left = Math.random() < 0.5, type = "normal", mul, sp, r, hp = 1, i;
     if (mode === 3) {
       mul = cfg.speed;
-      if (cfg.boss) { type = "boss"; }
-      else { var q = Math.random(); if (q < cfg.bomb) { type = "bomb"; } else if (q < cfg.bomb + cfg.golden) { type = "gold"; } }
+      if (cfg.boss) { type = "boss"; hp = cfg.hp; }
+      else {
+        var q = Math.random(), acc = 0;
+        for (i = 0; i < cfg.types.length; i++) {
+          acc += cfg.types[i][1];
+          if (q < acc) { type = cfg.types[i][0]; break; }
+        }
+        if (type === "shield") { hp = 2; }
+      }
     } else { mul = 1 + 0.8 * el / duration; }
     sp = (3 + Math.random() * 3) * mul * (W / 1280);
     if (type === "gold") { sp *= 1.4; }
+    if (type === "mini") { sp *= 1.25; }
+    if (type === "fast") { sp *= 2.2; }
+    if (type === "zig") { sp *= 0.9; }
+    if (type === "shield") { sp *= 0.8; }
     if (type === "boss") { sp = 2.2 * mul * (W / 1280); }
-    r = (type === "boss" ? 90 : 38) * u;
-    var hp = type === "boss" ? cfg.hp : 1;
+    r = (type === "boss" ? 90 : type === "mini" ? 22 : type === "shield" ? 44 : 38) * u;
     return { x: left ? -r : W + r, y: type === "boss" ? H * 0.34 : H * (0.15 + Math.random() * 0.5), by: H * 0.34,
              vx: (left ? 1 : -1) * sp, vy: 0, r: r, type: type, hp: hp, maxHp: hp,
-             dead: false, seed: Math.random() * 6.28, spin: 0, entered: false };
+             dead: false, seed: Math.random() * 6.28, spin: 0, entered: false, turnAt: 0 };
   }
 
   // ================= التحديث =================
@@ -732,7 +795,7 @@
       if (n <= 0) { phase = "play"; startTime = tn; sfx.go(); tvDirty = true; }
     }
     if (phase === "play") {
-      var el = (tn - startTime) / 1000, total = mode === 3 ? cfg.time : duration;
+      var el = (tn - startTime) / 1000, total = mode === 3 ? cfg.time + bonusTime : duration;
       if (mode === 3 && progress >= cfg.target) { finishLevel(true); return; }
       if (el >= total) { if (mode === 3) { finishLevel(false); } else { endGame(); } return; }
       var want = mode === 1 ? 2 : (mode === 2 ? Math.min(4, active.length + 1) : cfg.simult);
@@ -753,9 +816,19 @@
             if (d.x > W - d.r) { d.vx = -Math.abs(d.vx); }
           }
           d.y = d.by + Math.sin(t * 0.002 + d.seed) * H * 0.12;
+        } else if (d.type === "zig") {
+          if (t >= d.turnAt) {
+            d.turnAt = t + 350 + Math.random() * 500;
+            d.vy = (Math.random() - 0.5) * 14 * u;
+            d.vx = (d.vx > 0 ? 1 : -1) * (2 + Math.random() * 7) * (W / 1280);
+          }
+          d.x += d.vx * dt; d.y += d.vy * dt;
+          if (d.y < 40 * u) { d.y = 40 * u; d.vy = Math.abs(d.vy); }
+          if (d.y > H * 0.78) { d.y = H * 0.78; d.vy = -Math.abs(d.vy); }
+          if (d.x < -150 * u || d.x > W + 150 * u) { ducks.splice(i, 1); }
         } else {
           d.x += d.vx * dt;
-          d.y += (d.vy + Math.sin(t * 0.005 + d.seed) * 1.2 * u) * dt;
+          d.y += (d.vy + Math.sin(t * 0.005 + d.seed) * (d.type === "fast" ? 0.5 : 1.2) * u) * dt;
           if (d.y < 40 * u) { d.y = 40 * u; }
           if (d.x < -150 * u || d.x > W + 150 * u) { ducks.splice(i, 1); }
         }
@@ -801,14 +874,10 @@
 
   function drawDuck(d) {
     var t = now(), s = d.r / (38 * u), dir = d.vx > 0 ? 1 : -1;
-    var body, chest, head, wing;
-    if (d.type === "gold") { body = "#ffd54f"; chest = "#ffb300"; head = "#fff176"; wing = "#ff8f00"; }
-    else if (d.type === "bomb") { body = "#8b1a1a"; chest = "#5a0f0f"; head = "#2b2b2b"; wing = "#3a0b0b"; }
-    else if (d.type === "boss") { body = "#3d3d5c"; chest = "#6a4c93"; head = "#c62828"; wing = "#26264a"; }
-    else { body = "#9c8566"; chest = "#7a4b2a"; head = "#1b8a3c"; wing = "#5b4a37"; }
+    var cl = DUCKCOL[d.type] || DUCKCOL.normal, body = cl[0], chest = cl[1], head = cl[2], wing = cl[3];
 
-    if (!d.dead && (d.type === "gold" || d.type === "bomb")) {
-      ctx.fillStyle = d.type === "gold" ? "rgba(255,230,100,.28)" : "rgba(255,40,40," + (0.2 + 0.12 * Math.sin(t * 0.012)) + ")";
+    if (!d.dead && (d.type === "gold" || d.type === "bomb" || d.type === "time")) {
+      ctx.fillStyle = d.type === "gold" ? "rgba(255,230,100,.28)" : d.type === "time" ? "rgba(80,200,255,.3)" : "rgba(255,40,40," + (0.2 + 0.12 * Math.sin(t * 0.012)) + ")";
       ctx.beginPath(); ctx.arc(d.x, d.y, d.r * 1.7, 0, 6.2832); ctx.fill();
     }
     ctx.save();
@@ -821,6 +890,15 @@
     ctx.beginPath(); ctx.moveTo(-26, -4); ctx.lineTo(-48, -14); ctx.lineTo(-44, 6); ctx.closePath(); ctx.fill();
     ell(0, 0, 36, 24, body);
     ell(8, 7, 24, 14, chest);
+    if (d.type === "time") {
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(2, 2, 11, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = "#0d47a1"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(2, 2); ctx.lineTo(2, -6); ctx.moveTo(2, 2); ctx.lineTo(8, 4); ctx.stroke();
+    }
+    if (d.type === "shield" && d.hp === d.maxHp) {
+      ctx.strokeStyle = "#eceff1"; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(0, 0, 46, 0, 6.2832); ctx.stroke();
+    }
     ctx.save(); ctx.translate(-4, -8); ctx.rotate(-0.4 - flap);
     ell(-8, -10, 28, 11, wing);
     ctx.restore();
@@ -1012,7 +1090,7 @@
       text(String(n), W / 2, H * 0.62, 220, "#fff");
     }
     if (phase === "play") {
-      var total = mode === 3 ? cfg.time : duration, left = Math.max(0, total - (t - startTime) / 1000);
+      var total = mode === 3 ? cfg.time + bonusTime : duration, left = Math.max(0, total - (t - startTime) / 1000);
       drawTimer(left, total);
       for (i = 0; i < active.length; i++) {
         var chx = i < 2 ? 20 * u + i * 204 * u : W - 20 * u - 190 * u - (3 - i) * 204 * u;
