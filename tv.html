@@ -682,7 +682,7 @@
       }
       p.ammo--; p.flash = 6; tvDirty = true;
       shoot(p);
-    } else if (phase === "menu" || phase === "time" || phase === "end") {
+    } else if (phase === "menu" || phase === "time" || phase === "lvlmenu" || phase === "end") {
       p.flash = 6;
       if (p === host()) { press(p.x, p.y); }
     }
