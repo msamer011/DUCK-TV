@@ -213,6 +213,7 @@
     time: "اختار الوقت من الشاشة",
     lvlmenu: "اختار: استكمال أو من الأول",
     count: "استعد!",
+    mathmenu: "اختار مستوى الرياضيات من الشاشة",
     play: "اضرب البطات!",
     end: "انتهت الجولة"
   };
@@ -242,6 +243,7 @@
       $("ammo").style.color = "#ffd54f"; $("ammo").innerHTML = bullets;
     }
     var msg = PHASES[tv.phase] || "";
+    if (tv.mode === 4 && tv.phase === "play") { msg = "اضرب البطة اللي عليها الإجابة الصحيحة!"; }
     if (tv.mode === 3 && tv.lvl) { msg = "مرحلة " + tv.lvl + ": " + msg; }
     $("phase").innerHTML = msg;
   }
